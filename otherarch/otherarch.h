@@ -61,6 +61,10 @@ struct kcpp_params {
     bool use_fastforward             = false;
     bool swa_full                    = true;
     bool smartcache                  = false;
+    // >>> hybrid-cpp fork
+    int hybrid_checkpoint_interval   = 0;
+    int hybrid_checkpoint_slots      = 0;
+    // <<< hybrid-cpp fork
 };
 
 // default hparams (GPT-J 6B)

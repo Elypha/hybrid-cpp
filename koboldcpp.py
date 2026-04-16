@@ -247,6 +247,10 @@ class load_model_inputs(ctypes.Structure):
                 ("swa_support", ctypes.c_bool),
                 ("smartcache", ctypes.c_bool),
                 ("smartcacheslots", ctypes.c_int),
+                # >>> hybrid-cpp fork
+                ("hybrid_checkpoint_interval", ctypes.c_int),
+                ("hybrid_checkpoint_slots", ctypes.c_int),
+                # <<< hybrid-cpp fork
                 ("pipelineparallel", ctypes.c_bool),
                 ("lora_multiplier", ctypes.c_float),
                 ("devices_override", ctypes.c_char_p),
@@ -917,6 +921,10 @@ def init_library():
     handle.last_logprobs.restype = last_logprobs_outputs
     handle.detokenize.argtypes = [token_count_outputs]
     handle.detokenize.restype = ctypes.c_char_p
+    # >>> hybrid-cpp fork
+    handle.kcpp_hybrid_checkpoints_invalidate.restype = None
+    handle.kcpp_hybrid_checkpoints_invalidate.argtypes = []
+    # <<< hybrid-cpp fork
 
 def set_backend_props(inputs):
     # we must force an explicit tensor split
@@ -1828,6 +1836,25 @@ def load_model(model_filename):
     sclimit = (savestate_limit_default if scint<=1 else scint)
     savestate_limit = sclimit
     inputs.smartcacheslots = sclimit
+    # >>> hybrid-cpp fork
+    inputs.hybrid_checkpoint_interval = int(args.hybridcheckpointinterval) if args.hybridcheckpointinterval else 0
+    inputs.hybrid_checkpoint_slots    = int(args.hybridcheckpointslots) if args.hybridcheckpointslots else 0
+    if inputs.hybrid_checkpoint_slots > 0 and inputs.hybrid_checkpoint_interval > 0:
+        _hi = inputs.hybrid_checkpoint_interval
+        _hb = int(args.batchsize) if args.batchsize and args.batchsize > 0 else 512
+        if _hi < 32:
+            raise ValueError(f"--hybridcheckpointinterval ({_hi}) must be >= 32")
+        if _hi <= _hb:
+            if _hb % _hi != 0:
+                raise ValueError(
+                    f"--hybridcheckpointinterval ({_hi}) must evenly divide "
+                    f"--batchsize ({_hb}) when interval <= batch")
+        else:
+            if _hi % _hb != 0:
+                raise ValueError(
+                    f"--batchsize ({_hb}) must evenly divide "
+                    f"--hybridcheckpointinterval ({_hi}) when interval > batch")
+    # <<< hybrid-cpp fork
     inputs.pipelineparallel = (not args.nopipelineparallel)
     inputs = set_backend_props(inputs)
     ret = handle.load_model(inputs)
@@ -5464,6 +5491,12 @@ Change Mode<br>
                 response_body = (json.dumps({"success": "true", "done":"false"}).encode())
             else:
                 response_body = (json.dumps({"success": "false", "done":"false"}).encode())
+
+        # >>> hybrid-cpp fork
+        elif self.path.endswith('/api/extra/hybrid_checkpoints/invalidate'):
+            handle.kcpp_hybrid_checkpoints_invalidate()
+            response_body = (json.dumps({"ok": True}).encode())
+        # <<< hybrid-cpp fork
 
         elif self.path.endswith('/api/extra/generate/check'):
             if not self.secure_endpoint():
@@ -10714,6 +10747,10 @@ if __name__ == '__main__':
     advparser.add_argument("--nofastforward", help="If set, do not attempt to fast forward GGUF context (always reprocess). Will also enable noshift", action='store_true')
     advparser.add_argument("--useswa", help="If set, allows Sliding Window Attention (SWA) KV Cache, which saves memory but cannot be used with context shifting.", action='store_true')
     advparser.add_argument("--smartcache", help="Enables intelligent context switching by saving KV cache snapshots to RAM. Requires fast forwarding.", metavar=('limit'), nargs='?', const=1, type=int, default=0)
+    # >>> hybrid-cpp fork
+    advparser.add_argument("--hybridcheckpointinterval", help="Token interval between periodic recurrent-state checkpoints. Only effective on hybrid/recurrent models. Must be >= 32 and must divide (or be divided by) --batchsize evenly. 0 disables.", metavar=('N'), type=int, default=0)
+    advparser.add_argument("--hybridcheckpointslots", help="Max number of periodic (Hook B) hybrid checkpoint slots to retain. The tail-proximal protective slot is extra and does NOT count against this budget, so the pool may hold up to M+1 entries at peak. Only effective on hybrid/recurrent models. 0 disables.", metavar=('M'), type=int, default=0)
+    # <<< hybrid-cpp fork
     advparser.add_argument("--ropeconfig", help="If set, uses customized RoPE scaling from configured frequency scale and frequency base (e.g. --ropeconfig 0.25 10000). Otherwise, uses NTK-Aware scaling set automatically based on context size. For linear rope, simply set the freq-scale and ignore the freq-base",metavar=('[rope-freq-scale]', '[rope-freq-base]'), default=[0.0, 10000.0], type=float, nargs='+')
     advparser.add_argument("--overridenativecontext", help="Overrides the native trained context of the loaded model with a custom value to be used for Rope scaling.",metavar=('[trained context]'), type=int, default=0)
     compatgroup3 = advparser.add_mutually_exclusive_group()

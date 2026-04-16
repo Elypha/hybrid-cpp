@@ -1,0 +1,28 @@
+CompileFlags:
+  CompilationDatabase: .
+  Add:
+    - -xc++
+    - -std=c++17
+    - -I.
+    - -Iinclude
+    - -Iggml/include
+    - -Iggml/src
+    - -Icommon
+    - -DGGML_USE_METAL
+    - -DSD_USE_METAL
+  Remove:
+    - -march=*
+    - -mcpu=*
+
+Diagnostics:
+  Suppress:
+    - pp_including_mainfile_in_preamble
+    - -Wunused-function
+  UnusedIncludes: None
+
+Index:
+  Background: Build
+  StandardLibrary: Yes
+
+InlayHints:
+  Enabled: No
