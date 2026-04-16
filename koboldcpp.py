@@ -312,7 +312,10 @@ class generation_inputs(ctypes.Structure):
                 ("logit_biases_len", ctypes.c_int),
                 ("logit_biases", ctypes.POINTER(logit_bias)),
                 ("banned_tokens_len", ctypes.c_int),
-                ("banned_tokens", ctypes.POINTER(ctypes.c_char_p))]
+                ("banned_tokens", ctypes.POINTER(ctypes.c_char_p)),
+                # >>> hybrid-cpp fork
+                ("cache_prompt", ctypes.c_bool)]
+                # <<< hybrid-cpp fork
 
 class generation_outputs(ctypes.Structure):
     _fields_ = [("status", ctypes.c_int),
@@ -2076,6 +2079,10 @@ def generate(genparams, stream_flag=False):
     inputs.banned_tokens = (ctypes.c_char_p * inputs.banned_tokens_len)()
     for n, tok in enumerate(banned_tokens):
         inputs.banned_tokens[n] = tok.encode("UTF-8")
+
+    # >>> hybrid-cpp fork
+    inputs.cache_prompt = genparams.get('cache_prompt', True)
+    # <<< hybrid-cpp fork
 
     currentusergenkey = genkey
     totalgens += 1

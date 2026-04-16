@@ -4134,6 +4134,17 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
         }
         // <<< hybrid-cpp fork
     }
+
+    // >>> hybrid-cpp fork
+    bool no_cache_prompt = !inputs.cache_prompt;
+    NoCachePromptGuard nocache_guard(llama_ctx_v4, current_context_tokens, last_n_tokens);
+    if(no_cache_prompt) {
+        if(!nocache_guard.arm()) {
+            no_cache_prompt = false;
+        }
+    }
+    // <<< hybrid-cpp fork
+
     bool blank_prompt = (addedmemory=="" && kcpp_data->prompt=="");
 
     //smart cache logic
@@ -4200,9 +4211,6 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                             printf("\n[SmartCache RNN Match of %d tokens in slot %d. Switching...]\n",bestlen,bestslot);
                         }
                         gpttype_load_state_kv(bestslot);
-                        // >>> hybrid-cpp fork
-                        hybrid_ckpt_clear();
-                        // <<< hybrid-cpp fork
                     }
                 }
                 else
@@ -4267,9 +4275,6 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                                 printf("\n[SmartCache Match of %.2f in slot %d. Switching...]\n",similaritybeat,i);
                             }
                             gpttype_load_state_kv(i);
-                            // >>> hybrid-cpp fork
-                            hybrid_ckpt_clear();
-                            // <<< hybrid-cpp fork
                             foundswap = true;
                             break;
                         }
@@ -4303,7 +4308,8 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
             if(kcpp_data->use_fastforward)
             {
                 // >>> hybrid-cpp fork
-                const bool hybrid_restored = hybrid_ckpt_try_fast_forward(
+                const bool hybrid_restored = !no_cache_prompt &&
+                    hybrid_ckpt_try_fast_forward(
                     llama_ctx_v4,
                     current_context_tokens, embd_inp, last_n_tokens, n_past,
                     is_hybrid_model,
@@ -4322,7 +4328,9 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
             {
                 llama_memory_clear(llama_get_memory(llama_ctx_v4),true);
                 // >>> hybrid-cpp fork
-                hybrid_ckpt_clear();
+                if(!no_cache_prompt) {
+                    hybrid_ckpt_clear();
+                }
                 // <<< hybrid-cpp fork
                 if(draft_ctx)
                 {
@@ -4544,7 +4552,8 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                     // >>> hybrid-cpp fork
                     const bool hybrid_active = (is_hybrid_model
                         && kcpp_data->hybrid_checkpoint_slots > 0
-                        && kcpp_data->hybrid_checkpoint_interval > 0);
+                        && kcpp_data->hybrid_checkpoint_interval > 0
+                        && !no_cache_prompt);
                     // <<< hybrid-cpp fork
 
                     // >>> hybrid-cpp fork
@@ -4763,12 +4772,14 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                 }
 
                 // >>> hybrid-cpp fork
-                hybrid_ckpt_prune_end_of_pp(
-                    n_past,
-                    kcpp_data->hybrid_checkpoint_interval,
-                    kcpp_data->hybrid_checkpoint_slots,
-                    is_hybrid_model,
-                    debugmode, is_quiet);
+                if(!no_cache_prompt) {
+                    hybrid_ckpt_prune_end_of_pp(
+                        n_past,
+                        kcpp_data->hybrid_checkpoint_interval,
+                        kcpp_data->hybrid_checkpoint_slots,
+                        is_hybrid_model,
+                        debugmode, is_quiet);
+                }
                 // <<< hybrid-cpp fork
 
                  //if running rnn model in smartcache mode, save progress before each gen

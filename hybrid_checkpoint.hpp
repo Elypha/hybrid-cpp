@@ -93,3 +93,59 @@ void hybrid_ckpt_prune_end_of_pp(int final_n_past,
                                  bool is_hybrid_model,
                                  int debugmode,
                                  bool is_quiet);
+
+struct NoCachePromptGuard {
+    llama_context * ctx;
+    std::vector<int> & ctx_tokens_ref;
+    std::vector<int> & last_n_ref;
+    std::vector<uint8_t> state_backup;
+    std::vector<int> tokens_backup;
+    std::vector<int> last_n_backup;
+    bool active = false;
+
+    NoCachePromptGuard(llama_context * c,
+                       std::vector<int> & ct,
+                       std::vector<int> & ln)
+        : ctx(c), ctx_tokens_ref(ct), last_n_ref(ln) {}
+
+    bool arm() {
+        if(!ctx) return false;
+        tokens_backup  = ctx_tokens_ref;
+        last_n_backup  = last_n_ref;
+        size_t sz = llama_state_get_size(ctx);
+        try {
+            state_backup.resize(sz);
+        } catch(const std::bad_alloc&) {
+            printf("[hybrid-cpp] cache_prompt=false: failed to allocate %zu bytes for state backup, falling back to normal mode\n", sz);
+            fflush(stdout);
+            return false;
+        }
+        size_t n = llama_state_get_data(ctx, state_backup.data(), sz);
+        if(n == 0) {
+            printf("[hybrid-cpp] cache_prompt=false: state backup failed, falling back to normal mode\n");
+            fflush(stdout);
+            state_backup.clear();
+            return false;
+        }
+        active = true;
+        printf("[hybrid-cpp] cache_prompt=false: state backed up (%zu MB), hybrid pool frozen\n", sz / (1024*1024));
+        fflush(stdout);
+        return true;
+    }
+
+    ~NoCachePromptGuard() {
+        if(!active || state_backup.empty()) return;
+        size_t n = llama_state_set_data(ctx, state_backup.data(), state_backup.size());
+        if(n > 0) {
+            ctx_tokens_ref = tokens_backup;
+            last_n_ref     = last_n_backup;
+            printf("[hybrid-cpp] cache_prompt=false: state restored (%zu MB)\n", state_backup.size() / (1024*1024));
+        } else {
+            printf("[hybrid-cpp] cache_prompt=false: WARNING state restore failed! KV state may be corrupted\n");
+        }
+        fflush(stdout);
+    }
+
+    NoCachePromptGuard(const NoCachePromptGuard&) = delete;
+    NoCachePromptGuard& operator=(const NoCachePromptGuard&) = delete;
+};

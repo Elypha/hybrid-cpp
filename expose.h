@@ -143,6 +143,9 @@ struct generation_inputs
     const logit_bias * logit_biases = nullptr;
     const int banned_tokens_len = 0;
     const char ** banned_tokens = nullptr;
+    // >>> hybrid-cpp fork
+    const bool cache_prompt = true;
+    // <<< hybrid-cpp fork
 };
 struct generation_outputs
 {
