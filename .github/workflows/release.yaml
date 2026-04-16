@@ -1,0 +1,228 @@
+name: Build Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (e.g. v1.0.0). If empty, builds from current branch without creating a release.'
+        required: false
+        default: ''
+
+permissions: write-all
+
+jobs:
+  # Create draft release from tag
+  # --------------------------------
+  create-release:
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.tag != ''
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - name: Resolve tag
+        id: resolve
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.resolve.outputs.tag }}"
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --title "hybrid-cpp ${TAG}" \
+            --draft \
+            --notes "hybrid-cpp ${TAG}" \
+            2>/dev/null || echo "Release already exists, will upload assets"
+
+  # macOS (arm64, Metal)
+  # --------------------------------
+  build-macos:
+    needs: create-release
+    if: always() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped')
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install dependencies
+        run: pip install customtkinter pyinstaller tk jinja2
+
+      - name: Build
+        run: |
+          make LLAMA_METAL=1 LLAMA_PORTABLE=1
+          chmod +x './create_ver_file.sh'
+          . create_ver_file.sh
+          pyinstaller --noconfirm --onefile \
+            --collect-all customtkinter --collect-all jinja2 --collect-all psutil \
+            --add-data './koboldcpp_default.so:.' \
+            --add-data './ggml-metal-merged.metal:.' \
+            --add-data './kcpp_adapters:./kcpp_adapters' \
+            --add-data './koboldcpp.py:.' \
+            --add-data './json_to_gbnf.py:.' \
+            --add-data './LICENSE.md:.' \
+            --add-data './MIT_LICENSE_GGML_SDCPP_LLAMACPP_ONLY.md:.' \
+            --add-data './embd_res:./embd_res' \
+            --version-file './version.txt' \
+            --clean --console koboldcpp.py -n "koboldcpp-mac-arm64"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: koboldcpp-mac-arm64
+          path: dist/koboldcpp-mac-arm64
+
+      - name: Upload to release
+        if: needs.create-release.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ needs.create-release.outputs.tag }}" \
+            dist/koboldcpp-mac-arm64 --clobber \
+            --repo "${{ github.repository }}"
+
+  # Linux (x64, CUDA 12.1)
+  # --------------------------------
+  build-linux:
+    needs: create-release
+    if: always() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped')
+    runs-on: ubuntu-22.04
+    env:
+      KCPP_CUDA: 12.1.0
+      ARCHES_CU12: 1
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install git curl bzip2 python3-tk tcl tk
+
+      - name: Set Tcl/Tk Paths
+        run: |
+          echo "TCL_LIBRARY=$(find /usr/lib/ -name 'tcl8*' | head -n 1)" >> $GITHUB_ENV
+          echo "TK_LIBRARY=$(find /usr/lib/ -name 'tk8*' | head -n 1)" >> $GITHUB_ENV
+
+      - name: Build
+        run: ./koboldcpp.sh dist
+
+      - name: Rename artifacts
+        run: mv dist/koboldcpp-linux-x64-cuda1210 dist/koboldcpp-linux-x64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: koboldcpp-linux-x64
+          path: |
+            dist/koboldcpp-linux-x64
+            dist/koboldcpp-linux-x64-nocuda
+
+      - name: Upload to release
+        if: needs.create-release.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ needs.create-release.outputs.tag }}" \
+            dist/koboldcpp-linux-x64 \
+            dist/koboldcpp-linux-x64-nocuda \
+            --clobber --repo "${{ github.repository }}"
+
+  # Windows (x64, CUDA 12.1 + Vulkan)
+  # --------------------------------
+  build-windows:
+    needs: create-release
+    if: always() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped')
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: 3.8.10
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install customtkinter==5.2.0 pyinstaller==5.12.0 psutil==5.9.5 jinja2==3.1.6
+
+      - name: Install Visual Studio 2019
+        shell: cmd
+        run: |
+          @echo off
+          curl -fLO https://download.visualstudio.microsoft.com/download/pr/1fbe074b-8ae1-4e9b-8e83-d1ce4200c9d1/61098e228df7ba3a6a8b4e920a415ad8878d386de6dd0f23f194fe1a55db189a/vs_Enterprise.exe
+          vs_Enterprise.exe --quiet --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.CLI.Support --add Microsoft.VisualStudio.Component.Windows10SDK.19041 --add Microsoft.VisualStudio.Workload.UniversalBuildTools --add Microsoft.VisualStudio.Component.VC.CMake.Project
+          set "ProcessName=setup.exe"
+          :CheckProcess
+          tasklist /FI "IMAGENAME eq %ProcessName%" | find /I "%ProcessName%" >nul
+          if %errorlevel%==0 (
+              ping 127.0.0.1 /n 5 >nul
+              goto CheckProcess
+          )
+          exit /b 0
+
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.35
+        with:
+          cuda: '12.1.0'
+          use-github-cache: false
+
+      - name: Disable VS 2022
+        run: |
+          Rename-Item "C:\Program Files\Microsoft Visual Studio\2022\Enterprise" "Enterprise_DISABLED"
+        shell: pwsh
+
+      - name: Install w64devkit
+        run: |
+          curl -L https://github.com/skeeto/w64devkit/releases/download/v1.22.0/w64devkit-1.22.0.zip --output w64devkit.zip
+          Expand-Archive w64devkit.zip -DestinationPath .
+
+      - name: Add w64devkit to PATH
+        run: |
+          echo "$(Get-Location)\w64devkit\bin" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
+
+      - name: Build non-CUDA
+        run: make LLAMA_VULKAN=1 LLAMA_PORTABLE=1 -j ${env:NUMBER_OF_PROCESSORS}
+
+      - name: Build CUDA
+        run: |
+          mkdir build
+          cd build
+          cmake .. -DLLAMA_CUBLAS=ON -DCMAKE_SYSTEM_VERSION="10.0.19041.0"
+          cmake --build . --config Release -j 2
+          cd ..
+
+      - name: Copy CuBLAS libraries
+        run: |
+          copy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1\bin\cublasLt64_12.dll" .
+          copy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1\bin\cublas64_12.dll" .
+
+      - name: Package executables
+        run: |
+          ./make_pyinstaller.bat
+          ./make_pyinstaller_cuda.bat
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: koboldcpp-windows
+          path: |
+            dist/koboldcpp.exe
+            dist/koboldcpp-nocuda.exe
+
+      - name: Upload to release
+        if: needs.create-release.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ needs.create-release.outputs.tag }}" `
+            dist/koboldcpp.exe `
+            dist/koboldcpp-nocuda.exe `
+            --clobber --repo "${{ github.repository }}"
