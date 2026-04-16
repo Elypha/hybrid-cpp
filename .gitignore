@@ -145,3 +145,8 @@ conda/
 
 # Jetbrains idea folder
 .idea/
+
+# >>> hybrid-cpp fork
+/.remote/
+.tmp
+# <<< hybrid-cpp fork

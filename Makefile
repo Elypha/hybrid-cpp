@@ -674,6 +674,12 @@ console.o: common/console.cpp common/console.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 expose.o: expose.cpp expose.h model_adapter.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
+# >>> hybrid-cpp fork
+hybrid_checkpoint.o: hybrid_checkpoint.cpp hybrid_checkpoint.hpp
+	$(CXX) $(CXXFLAGS) -c hybrid_checkpoint.cpp -o hybrid_checkpoint.o
+hybrid_checkpoint_io.o: hybrid_checkpoint_io.cpp hybrid_checkpoint.hpp otherarch/utils.h
+	$(CXX) $(CXXFLAGS) -c hybrid_checkpoint_io.cpp -o hybrid_checkpoint_io.o
+# <<< hybrid-cpp fork
 llama-impl.o: src/llama-impl.cpp src/llama-impl.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 budget.o: common/reasoning-budget.cpp common/reasoning-budget.h
@@ -852,6 +858,10 @@ else
 	@echo 'Vulkan Shaders (no extensions) Rebuilt for Linux...'
 endif
 
+# >>> hybrid-cpp fork
+koboldcpp_default: hybrid_checkpoint.o hybrid_checkpoint_io.o
+# <<< hybrid-cpp fork
+
 #generated libraries
 koboldcpp_default: ggml.o ggml-cpu.o ggml-ops.o ggml-vec.o ggml-binops.o ggml-unops.o ggml_v3.o ggml_v2.o ggml_v1.o expose.o gpttype_adapter.o sdcpp_default.o whispercpp_default.o tts_default.o music_default.o embeddings_default.o llavaclip_default.o llava.o ggml-backend.o ggml-backend-meta.o ggml-backend-reg_default.o ggml-repack.o $(OBJS_FULL) $(OBJS)
 	$(DEFAULT_BUILD)
@@ -939,3 +949,4 @@ build-info.h:
 finishedmsg:
 	$(NOTIFY_MSG)
 	$(DONOTHING)
+

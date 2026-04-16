@@ -127,6 +127,9 @@ static int debugmode = 0; //-1 = hide all, 0 = normal, 1 = showall
 static bool is_quiet = false;
 static std::vector<gpt_vocab::id> last_n_tokens;
 static std::vector<gpt_vocab::id> current_context_tokens;
+// >>> hybrid-cpp fork
+#include "hybrid_checkpoint.hpp"
+// <<< hybrid-cpp fork
 static std::vector<float> loaded_latest_logits; //do not use normally, this is only required when loading state happens and we need to override logits
 static size_t mem_per_token = 0;
 static std::vector<float> logits;
@@ -2181,6 +2184,9 @@ void kcpp_init_audio_proj(clip_ctx * ctx_a)
 
 ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in_file_format, FileFormatExtraMeta in_file_format_meta)
 {
+    // >>> hybrid-cpp fork
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    // <<< hybrid-cpp fork
     is_quiet = inputs.quiet;
     ggml_time_init();
     kcpp_data = new kcpp_params(); //allocate on heap to avoid linux segfault. yes this leaks memory.
@@ -2206,6 +2212,10 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
     kcpp_data->use_contextshift = inputs.use_contextshift;
     kcpp_data->use_fastforward = inputs.use_fastforward;
     kcpp_data->smartcache = inputs.smartcache;
+    // >>> hybrid-cpp fork
+    kcpp_data->hybrid_checkpoint_interval = inputs.hybrid_checkpoint_interval;
+    kcpp_data->hybrid_checkpoint_slots    = inputs.hybrid_checkpoint_slots;
+    // <<< hybrid-cpp fork
     kcpp_data->swa_full = !inputs.swa_support;
     kcpp_extra_swa_padding = inputs.swa_padding;
     if (!kcpp_data->swa_full) {
@@ -2658,9 +2668,18 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
         {
             if(savestate_limit>0)
             {
-                printf("RNN or Hyrbid model with FF and shifting flags enabled - SmartCache will be enabled with extra slots. Disable CtxShift if you do not want this.\n",savestate_limit);
-                kcpp_data->smartcache = true;
-                savestate_limit += 1;
+                // >>> hybrid-cpp fork
+                if(llama_model_is_hybrid(llamamodel) && kcpp_data->hybrid_checkpoint_slots>0 && kcpp_data->hybrid_checkpoint_interval>0)
+                {
+                    printf("[hybrid-cpp] SmartCache auto-enable skipped: hybrid partial checkpoints (%d slots, interval %d) cover boundary + deep tail mutations at ~13x lower per-slot RAM.\n",kcpp_data->hybrid_checkpoint_slots,kcpp_data->hybrid_checkpoint_interval);
+                }
+                else
+                // <<< hybrid-cpp fork
+                {
+                    printf("RNN or Hyrbid model with FF and shifting flags enabled - SmartCache will be enabled with extra slots. Disable CtxShift if you do not want this.\n",savestate_limit);
+                    kcpp_data->smartcache = true;
+                    savestate_limit += 1;
+                }
             }
         }
         savestates.resize(savestate_limit);
@@ -2673,6 +2692,18 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
             kcpp_data->smartcache = false;
             printf("\nSmartCache IS DISABLED!\nSmartCache requires Fast Forwarding!\n");
         }
+
+        // >>> hybrid-cpp fork
+        if((llama_model_is_recurrent(llamamodel) || llama_model_is_hybrid(llamamodel))
+           && kcpp_data->hybrid_checkpoint_slots > 0
+           && kcpp_data->hybrid_checkpoint_interval > 0) {
+            printf("[hybrid-cpp] enabled, %d slots, interval %d tokens\n",
+                   kcpp_data->hybrid_checkpoint_slots,
+                   kcpp_data->hybrid_checkpoint_interval);
+        } else if(kcpp_data->hybrid_checkpoint_slots > 0 || kcpp_data->hybrid_checkpoint_interval > 0) {
+            printf("[hybrid-cpp] disabled (model is not hybrid/recurrent, or one of the two flags is zero)\n");
+        }
+        // <<< hybrid-cpp fork
 
         if(llama_model_rope_type(llamamodel)==LLAMA_ROPE_TYPE_MROPE || llama_model_rope_type(llamamodel)==LLAMA_ROPE_TYPE_IMROPE)
         {
@@ -4207,6 +4238,9 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
     }
 
     bool is_recurrent = false;
+    // >>> hybrid-cpp fork
+    bool is_hybrid_model = false;
+    // <<< hybrid-cpp fork
     if(file_format==FileFormat::GGUF_GENERIC)
     {
         const llama_model * mdl = llama_get_model(llama_ctx_v4);
@@ -4214,6 +4248,12 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
         {
             is_recurrent = true;
         }
+        // >>> hybrid-cpp fork
+        if(llama_model_is_hybrid(mdl))
+        {
+            is_hybrid_model = true;
+        }
+        // <<< hybrid-cpp fork
     }
     bool blank_prompt = (addedmemory=="" && kcpp_data->prompt=="");
 
@@ -4281,6 +4321,9 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                             printf("\n[SmartCache RNN Match of %d tokens in slot %d. Switching...]\n",bestlen,bestslot);
                         }
                         gpttype_load_state_kv(bestslot);
+                        // >>> hybrid-cpp fork
+                        hybrid_ckpt_clear();
+                        // <<< hybrid-cpp fork
                     }
                 }
                 else
@@ -4345,6 +4388,9 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                                 printf("\n[SmartCache Match of %.2f in slot %d. Switching...]\n",similaritybeat,i);
                             }
                             gpttype_load_state_kv(i);
+                            // >>> hybrid-cpp fork
+                            hybrid_ckpt_clear();
+                            // <<< hybrid-cpp fork
                             foundswap = true;
                             break;
                         }
@@ -4377,7 +4423,18 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
         {
             if(kcpp_data->use_fastforward)
             {
-                ContextFastForward(current_context_tokens, embd_inp, n_past, last_n_tokens, nctx, smartcontext, false, true, 0, 0);
+                // >>> hybrid-cpp fork
+                const bool hybrid_restored = hybrid_ckpt_try_fast_forward(
+                    llama_ctx_v4,
+                    current_context_tokens, embd_inp, last_n_tokens, n_past,
+                    is_hybrid_model,
+                    kcpp_data->hybrid_checkpoint_slots,
+                    kcpp_data->hybrid_checkpoint_interval);
+                if(!hybrid_restored)
+                // <<< hybrid-cpp fork
+                {
+                    ContextFastForward(current_context_tokens, embd_inp, n_past, last_n_tokens, nctx, smartcontext, false, true, 0, 0);
+                }
             }
         }
         if(is_recurrent)
@@ -4385,6 +4442,9 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
             if(n_past==0)
             {
                 llama_memory_clear(llama_get_memory(llama_ctx_v4),true);
+                // >>> hybrid-cpp fork
+                hybrid_ckpt_clear();
+                // <<< hybrid-cpp fork
                 if(draft_ctx)
                 {
                     llama_memory_clear(llama_get_memory(draft_ctx),true);
@@ -4623,42 +4683,49 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                     int32_t decode_status = -1;
                     bool skipdecodelater = false;
 
-                    //if running rnn model in smartcache mode, save progress a little bit before the final PP is done
-                    //this helps solve token boundary mutation issues
-                    if(draft_ctx==nullptr && embd.size()>1 && !startedsampling && input_consumed==embd_inp.size() && input_consumed>64)
+                    // >>> hybrid-cpp fork
+                    const bool hybrid_active = (is_hybrid_model
+                        && kcpp_data->hybrid_checkpoint_slots > 0
+                        && kcpp_data->hybrid_checkpoint_interval > 0);
+                    // <<< hybrid-cpp fork
+
+                    // >>> hybrid-cpp fork
+                    if(!hybrid_active)
+                    // <<< hybrid-cpp fork
                     {
-                        if(kcpp_data->smartcache && is_recurrent && file_format==FileFormat::GGUF_GENERIC && current_context_tokens.size() > 32)
+                        if(draft_ctx==nullptr && embd.size()>1 && !startedsampling && input_consumed==embd_inp.size() && input_consumed>64)
                         {
-                            if(embd.size()<=48)
+                            if(kcpp_data->smartcache && is_recurrent && file_format==FileFormat::GGUF_GENERIC && current_context_tokens.size() > 32)
                             {
-                                //directly snapshot for a small batch
-                                smartcache_quick_snapshot();
-                                rnn_snapshot_taken = true;
-                            }
-                            else
-                            {
-                                skipdecodelater = true;
-                                //decode until nearly done, then snapshot and decode the last 32
-                                std::vector<std::vector<gpt_vocab::id>> parts = split_big_vector_in_two(embd,32);
-                                int temp_past = n_past;
-                                evalres = true;
-                                for(int p=0;p<parts.size();++p)
+                                if(embd.size()<=48)
                                 {
-                                    if(p==parts.size()-1)
+                                    smartcache_quick_snapshot();
+                                    rnn_snapshot_taken = true;
+                                }
+                                else
+                                {
+                                    skipdecodelater = true;
+                                    std::vector<std::vector<gpt_vocab::id>> parts = split_big_vector_in_two(embd,32);
+                                    int temp_past = n_past;
+                                    evalres = true;
+                                    for(int p=0;p<parts.size();++p)
                                     {
-                                        smartcache_quick_snapshot();
-                                        rnn_snapshot_taken = true;
+                                        if(p==parts.size()-1)
+                                        {
+                                            smartcache_quick_snapshot();
+                                            rnn_snapshot_taken = true;
+                                        }
+                                        std::vector<gpt_vocab::id> chunk = parts[p];
+                                        kcpp_embd_batch smallbatch = kcpp_embd_batch(chunk, temp_past, use_mrope, false);
+                                        decode_status = llama_decode(llama_ctx_v4, smallbatch.batch);
+                                        if(p==0 && decode_status==1)
+                                        {
+                                            skipdecodelater = false;
+                                            break;
+                                        }
+                                        evalres = (evalres && (decode_status==0));
+                                        temp_past += chunk.size();
                                     }
-                                    std::vector<gpt_vocab::id> chunk = parts[p];
-                                    kcpp_embd_batch smallbatch = kcpp_embd_batch(chunk, temp_past, use_mrope, false);
-                                    decode_status = llama_decode(llama_ctx_v4, smallbatch.batch);
-                                    if(p==0 && decode_status==1)
-                                    {
-                                        skipdecodelater = false;
-                                        break; //big pp failed
-                                    }
-                                    evalres = (evalres && (decode_status==0));
-                                    temp_past += chunk.size();
                                 }
                             }
                         }
@@ -4666,29 +4733,46 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
 
                     if(!skipdecodelater)
                     {
-                        decode_status = llama_decode(llama_ctx_v4, batch.batch);
-                        if(decode_status==1 && embd.size()>128)
+                        // >>> hybrid-cpp fork
+                        if(hybrid_active && !startedsampling && embd.size() > 0)
                         {
-                            printf("Couldn't find a big KV slot. Retry with smaller batch size of 128...\n");
-                            std::vector<std::vector<gpt_vocab::id>> parts = split_big_vector(embd,128);
-                            int temp_past = n_past;
-                            evalres = true;
-                            for(int p=0;p<parts.size();++p)
-                            {
-                                std::vector<gpt_vocab::id> chunk = parts[p];
-                                kcpp_embd_batch smallbatch = kcpp_embd_batch(chunk, temp_past, use_mrope, false);
-                                int32_t decode_status2 = llama_decode(llama_ctx_v4, smallbatch.batch);
-                                if(debugmode==1 && !is_quiet)
-                                {
-                                    printf("Retry chunk: %zu at %d... status: %s\n",chunk.size(),temp_past,(decode_status2==0?"ok":"fail"));
-                                }
-                                evalres = (evalres && (decode_status2==0));
-                                temp_past += chunk.size();
-                            }
+                            const int final_pos = n_past + (int)embd.size()
+                                + ((int)embd_inp.size() - input_consumed);
+                            const auto hres = hybrid_ckpt_run_planned_decode(
+                                llama_ctx_v4, embd, current_context_tokens, n_past, final_pos,
+                                kcpp_data->hybrid_checkpoint_interval,
+                                kcpp_data->hybrid_checkpoint_slots,
+                                use_mrope);
+                            evalres = hres.ok;
+                            decode_status = hres.status;
                         }
                         else
+                        // <<< hybrid-cpp fork
                         {
-                            evalres = (decode_status==0);
+                            decode_status = llama_decode(llama_ctx_v4, batch.batch);
+                            if(decode_status==1 && embd.size()>128)
+                            {
+                                printf("Couldn't find a big KV slot. Retry with smaller batch size of 128...\n");
+                                std::vector<std::vector<gpt_vocab::id>> parts = split_big_vector(embd,128);
+                                int temp_past = n_past;
+                                evalres = true;
+                                for(int p=0;p<parts.size();++p)
+                                {
+                                    std::vector<gpt_vocab::id> chunk = parts[p];
+                                    kcpp_embd_batch smallbatch = kcpp_embd_batch(chunk, temp_past, use_mrope, false);
+                                    int32_t decode_status2 = llama_decode(llama_ctx_v4, smallbatch.batch);
+                                    if(debugmode==1 && !is_quiet)
+                                    {
+                                        printf("Retry chunk: %zu at %d... status: %s\n",chunk.size(),temp_past,(decode_status2==0?"ok":"fail"));
+                                    }
+                                    evalres = (evalres && (decode_status2==0));
+                                    temp_past += chunk.size();
+                                }
+                            }
+                            else
+                            {
+                                evalres = (decode_status==0);
+                            }
                         }
                     }
 
@@ -4819,6 +4903,15 @@ generation_outputs gpttype_generate(const generation_inputs inputs)
                 {
                     printf("\n");
                 }
+
+                // >>> hybrid-cpp fork
+                hybrid_ckpt_prune_end_of_pp(
+                    n_past,
+                    kcpp_data->hybrid_checkpoint_interval,
+                    kcpp_data->hybrid_checkpoint_slots,
+                    is_hybrid_model,
+                    debugmode, is_quiet);
+                // <<< hybrid-cpp fork
 
                  //if running rnn model in smartcache mode, save progress before each gen
                 if(kcpp_data->smartcache && is_recurrent && file_format==FileFormat::GGUF_GENERIC && current_context_tokens.size() > 32)

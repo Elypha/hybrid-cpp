@@ -80,6 +80,10 @@ struct load_model_inputs
     const int swa_padding = 0;
     const bool smartcache = false;
     const int smartcacheslots = 0;
+    // >>> hybrid-cpp fork
+    const int hybrid_checkpoint_interval = 0;
+    const int hybrid_checkpoint_slots = 0;
+    // <<< hybrid-cpp fork
     const bool pipelineparallel = false;
     const float lora_multiplier = 1.0f;
     const char * devices_override = nullptr;
@@ -370,6 +374,10 @@ struct music_generation_outputs
     const char * music_output_json = "";
     const char * data = "";
 };
+
+// >>> hybrid-cpp fork
+extern "C" void kcpp_hybrid_checkpoints_invalidate();
+// <<< hybrid-cpp fork
 
 extern std::string executable_path;
 extern std::string lora_filename;

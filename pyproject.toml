@@ -1,0 +1,10 @@
+[project]
+name = "hybrid-cpp"
+version = "0.1.0"
+description = "For testing the hybrid-cpp project"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "httpx>=0.28.1",
+    "pytest>=9.0.3",
+]
