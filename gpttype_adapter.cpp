@@ -2623,7 +2623,8 @@ ModelLoadResult gpttype_load_model(const load_model_inputs inputs, FileFormat in
                 // >>> hybrid-cpp fork
                 if(llama_model_is_hybrid(llamamodel) && kcpp_data->hybrid_checkpoint_slots>0 && kcpp_data->hybrid_checkpoint_interval>0)
                 {
-                    printf("[hybrid-cpp] SmartCache auto-enable skipped: hybrid partial checkpoints (%d slots, interval %d) cover boundary + deep tail mutations at ~13x lower per-slot RAM.\n",kcpp_data->hybrid_checkpoint_slots,kcpp_data->hybrid_checkpoint_interval);
+                    kcpp_data->smartcache = false;
+                    printf("[hybrid-cpp] SmartCache force-disabled: hybrid partial checkpoints (%d slots, interval %d) cover boundary + deep tail mutations at ~13x lower per-slot RAM.\n",kcpp_data->hybrid_checkpoint_slots,kcpp_data->hybrid_checkpoint_interval);
                 }
                 else
                 // <<< hybrid-cpp fork
