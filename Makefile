@@ -857,6 +857,13 @@ endif
 
 # >>> hybrid-cpp fork
 koboldcpp_default: hybrid_checkpoint.o hybrid_checkpoint_io.o
+koboldcpp_failsafe: hybrid_checkpoint.o hybrid_checkpoint_io.o
+koboldcpp_noavx2: hybrid_checkpoint.o hybrid_checkpoint_io.o
+koboldcpp_cublas: hybrid_checkpoint.o hybrid_checkpoint_io.o
+koboldcpp_hipblas: hybrid_checkpoint.o hybrid_checkpoint_io.o
+koboldcpp_vulkan: hybrid_checkpoint.o hybrid_checkpoint_io.o
+koboldcpp_vulkan_noavx2: hybrid_checkpoint.o hybrid_checkpoint_io.o
+koboldcpp_vulkan_failsafe: hybrid_checkpoint.o hybrid_checkpoint_io.o
 # <<< hybrid-cpp fork
 
 #generated libraries
