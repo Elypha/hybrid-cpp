@@ -148,6 +148,9 @@ struct generation_inputs
     const int banned_tokens_len = 0;
     const char ** banned_tokens = nullptr;
     const int reasoning_budget = -1;
+    // >>> hybrid-cpp fork
+    const bool cache_prompt = true;
+    // <<< hybrid-cpp fork
 };
 struct generation_outputs
 {
